@@ -1,0 +1,201 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Niche Engine</title>
+<style>
+:root{--bg:#f3f5f7;--fg:#12181f;--mut:#5d6975;--card:#fff;--bd:#d9e0e6;--acc:#0b6e78;--onacc:#fff;--bad:#b42318}
+@media(prefers-color-scheme:dark){:root{--bg:#0d1218;--fg:#e6ebf0;--mut:#8b98a5;--card:#151c24;--bd:#27313b;--acc:#52c7d1;--onacc:#06262a;--bad:#ff8a80}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.5 system-ui,sans-serif;padding:14px;max-width:760px;margin:auto}
+h1{font:700 26px/1.1 Georgia,serif;margin:6px 0 4px}h2,h3,h4{font-family:Georgia,serif;margin:14px 0 6px}
+p.s{color:var(--mut);margin:0 0 12px}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:10px;padding:12px;margin:10px 0}
+label{display:block;font-size:13px;color:var(--mut);margin:8px 0 3px}
+input[type=text],input[type=password],input[type=file]{width:100%;padding:10px;border:1px solid var(--bd);border-radius:8px;background:var(--bg);color:var(--fg);font-size:15px}
+button{background:var(--acc);color:var(--onacc);border:0;border-radius:8px;padding:12px 16px;font:600 15px system-ui;width:100%;margin-top:12px}
+button.g{background:var(--card);color:var(--fg);border:1px solid var(--bd);width:auto;padding:8px 12px;margin:8px 8px 0 0;font-size:13px}
+button:disabled{opacity:.5}
+pre#log{background:var(--bg);border:1px solid var(--bd);border-radius:8px;padding:8px;max-height:150px;overflow:auto;font-size:12px;white-space:pre-wrap;margin:8px 0 0}
+details{margin:10px 0}summary{cursor:pointer;font:700 17px Georgia,serif;padding:6px 0}
+.md{white-space:pre-wrap;overflow-wrap:anywhere}.md ul{margin:4px 0;padding-left:20px}.md a,td a{color:var(--acc)}
+.tw{overflow-x:auto}table{border-collapse:collapse;font-size:13px;min-width:100%}
+th,td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--bd);vertical-align:top}th{color:var(--mut);font-weight:600}
+.hot{color:var(--acc);font-weight:700}.err{color:var(--bad)}
+@media(prefers-reduced-motion:reduce){*{transition:none!important}}
+</style></head><body>
+<h1>Niche Engine</h1>
+<p class="s">Reference channel in, evidence-backed niche candidates out. Runs in your browser.</p>
+
+<div class="card">
+<label>YouTube Data API key</label><input type="password" id="yk" autocomplete="off">
+<label>Gemini API key</label><input type="password" id="gk" autocomplete="off">
+<label>Gemini model</label><input type="text" id="gm" value="gemini-2.5-flash">
+<p class="s" style="margin:8px 0 0;font-size:12px">Keys are saved only in this browser. Nothing is sent anywhere except Google's APIs.</p>
+</div>
+
+<div class="card">
+<label>Channel URL, @handle or name</label><input type="text" id="q" placeholder="@channelhandle">
+<label>Or a screenshot of the channel</label><input type="file" id="f" accept="image/*">
+<label><input type="checkbox" id="vid" checked> Analyse video openings (first 45 seconds, uses Gemini video input)</label>
+<button id="go">Run full analysis</button>
+<pre id="log">Ready.</pre>
+</div>
+<div id="out"></div>
+
+<script>
+const $=s=>document.querySelector(s);
+const st={get:k=>{try{return localStorage.getItem(k)||""}catch(e){return""}},set:(k,v)=>{try{localStorage.setItem(k,v)}catch(e){}}};
+["yk","gk","gm"].forEach(i=>{const v=st.get(i);if(v)$("#"+i).value=v;$("#"+i).onchange=e=>st.set(i,e.target.value.trim())});
+let quota=0;
+const log=m=>{const l=$("#log");l.textContent+="\n"+m;l.scrollTop=1e9};
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const med=a=>{const s=[...a].sort((x,y)=>x-y),n=s.length;return n?(n%2?s[(n-1)/2]:(s[n/2-1]+s[n/2])/2):0};
+const fmt=n=>n>=1e6?(n/1e6).toFixed(2)+"M":n>=1e3?(n/1e3).toFixed(1)+"K":String(n);
+
+async function yt(ep,cost,p){
+  p.key=$("#yk").value.trim();quota+=cost;
+  const r=await fetch("https://www.googleapis.com/youtube/v3/"+ep+"?"+new URLSearchParams(p));
+  const j=await r.json();
+  if(!r.ok)throw new Error("YouTube: "+(j.error&&j.error.message||r.status));
+  return j}
+
+const SYS=`You are a YouTube opportunity analyst. Evidence first.
+RULES
+1. Use ONLY the DATA provided and any attached media. Never invent search volume, competition scores, CTR, retention or predicted views.
+2. Never calculate. All medians, multiples and counts were computed by code. Quote them exactly.
+3. Tag every claim [OBSERVED] (in DATA or visible in media) or [INFERENCE] (your interpretation).
+4. Name the video title for every claim about a video.
+5. If data is insufficient, say so and recommend further research instead of guessing.
+6. Be tight: short bullets, no filler, no markdown tables.`;
+
+async function gem(parts,json){
+  const body={systemInstruction:{parts:[{text:SYS}]},contents:[{role:"user",parts}],generationConfig:{temperature:.2,...(json?{responseMimeType:"application/json"}:{})}};
+  for(let t=0;t<3;t++){
+    const r=await fetch("https://generativelanguage.googleapis.com/v1beta/models/"+$("#gm").value.trim()+":generateContent?key="+$("#gk").value.trim(),{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+    const j=await r.json();
+    if(r.ok){const p=(j.candidates&&j.candidates[0]&&j.candidates[0].content&&j.candidates[0].content.parts)||[];const x=p.map(a=>a.text||"").join("");if(!x)throw new Error("Gemini returned nothing (blocked or empty)");return json?JSON.parse(x.replace(/```json|```/g,"")):x}
+    if(r.status==429||r.status==503){log("Gemini busy, retrying in 8s...");await new Promise(z=>setTimeout(z,8000));continue}
+    throw new Error("Gemini: "+(j.error&&j.error.message||r.status))}
+  throw new Error("Gemini rate limit. Wait a minute and run again.")}
+
+const b64=async u=>{try{const b=await (await fetch(u)).blob();return await new Promise((ok,no)=>{const f=new FileReader();f.onload=()=>ok(f.result.split(",")[1]);f.onerror=no;f.readAsDataURL(b)})}catch(e){return null}};
+
+async function chan(p){
+  const r=await yt("channels",1,{part:"snippet,statistics,contentDetails",...p});const c=r.items&&r.items[0];
+  if(!c)throw new Error("Channel not found");
+  return{id:c.id,title:c.snippet.title,subs:+c.statistics.subscriberCount||0,views:+c.statistics.viewCount||0,n:+c.statistics.videoCount||0,up:c.contentDetails.relatedPlaylists.uploads}}
+
+async function resolve(q){
+  let m;q=q.trim();
+  if(m=q.match(/channel\/(UC[\w-]{22})/))return chan({id:m[1]});
+  if(m=q.match(/(@[\w.\-]+)/))return chan({forHandle:m[1]});
+  const r=await yt("search",100,{part:"snippet",q,type:"channel",maxResults:1});
+  if(!r.items||!r.items.length)throw new Error("No channel found for: "+q);
+  return chan({id:r.items[0].id.channelId})}
+
+async function fromShot(file){
+  const data=await new Promise(ok=>{const f=new FileReader();f.onload=()=>ok(f.result.split(",")[1]);f.readAsDataURL(file)});
+  const j=await gem([{inlineData:{mimeType:file.type||"image/jpeg",data}},{text:'Screenshot of a YouTube channel. Return JSON {"handle":str|null,"channel_name":str|null} using only what is visible. No guessing.'}],true);
+  log("Read from screenshot: "+(j.handle||j.channel_name));return j.handle||j.channel_name}
+
+const dur=s=>{const m=/^P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?)?$/.exec(s||"");return m?(+m[1]||0)*86400+(+m[2]||0)*3600+(+m[3]||0)*60+(+m[4]||0):0};
+
+async function vstats(ids){
+  const out=[];
+  for(let i=0;i<ids.length;i+=50){
+    const r=await yt("videos",1,{part:"snippet,statistics,contentDetails",id:ids.slice(i,i+50).join(",")});
+    for(const v of r.items){const s=v.snippet;out.push({id:v.id,ch:s.channelId,title:s.title,pub:Date.parse(s.publishedAt),views:+v.statistics.viewCount||0,likes:+v.statistics.likeCount||0,com:+v.statistics.commentCount||0,sec:dur(v.contentDetails.duration),desc:(s.description||"").slice(0,400),th:(s.thumbnails.maxres||s.thumbnails.high||s.thumbnails.medium||{}).url})}}
+  return out}
+
+async function uploads(c){
+  let ids=[],t;
+  do{const r=await yt("playlistItems",1,{part:"contentDetails",playlistId:c.up,maxResults:50,...(t?{pageToken:t}:{})});ids.push(...r.items.map(i=>i.contentDetails.videoId));t=r.nextPageToken}while(t&&ids.length<300);
+  return vstats(ids)}
+
+function metrics(v){
+  const now=Date.now();
+  const L=v.filter(x=>x.sec>=181).map(x=>({...x,age:+((now-x.pub)/864e5).toFixed(1)}));
+  L.forEach(x=>x.imm=x.age<7);
+  let base=L.filter(x=>!x.imm);if(base.length<5)base=L;
+  const m=med(base.map(x=>x.views));
+  L.forEach(x=>{x.mult=+(x.views/m).toFixed(2);x.out=x.mult>=3&&!x.imm;x.vpd=Math.round(x.views/Math.max(x.age,1));x.eng=+((x.likes+x.com)/Math.max(x.views,1)*100).toFixed(2)});
+  L.sort((a,b)=>b.mult-a.mult);
+  return{L,median:Math.round(m),nBase:base.length,conf:base.length<8?"low":base.length<20?"medium":"high",shorts:v.length-L.length}}
+
+async function packaging(c,M){
+  const sel=[...M.L.slice(0,9),...M.L.filter(x=>!x.imm).slice(-2)].filter((x,i,a)=>a.indexOf(x)===i);
+  const parts=[];let ok=0;
+  for(const x of sel){const d=x.th&&await b64(x.th);if(d){ok++;parts.push({text:"Thumbnail: "+x.title},{inlineData:{mimeType:"image/jpeg",data:d}})}}
+  log("Thumbnails loaded: "+ok+" of "+sel.length+(ok?"":" (browser blocked them; report will say so)"));
+  const vparts=[];
+  if($("#vid").checked)for(const x of M.L.filter(x=>x.out).slice(0,3))vparts.push({text:"Video opening, first 45s: "+x.title},{fileData:{fileUri:"https://www.youtube.com/watch?v="+x.id,mimeType:"video/*"},videoMetadata:{startOffset:"0s",endOffset:"45s"}});
+  const data={channel:{title:c.title,subs:c.subs,total_views:c.views,videos:c.n},baseline:{median_views:M.median,videos_in_baseline:M.nBase,confidence:M.conf,shorts_excluded:M.shorts},thumbnails_attached:ok,video_openings_attached:vparts.length/2,videos:M.L.map(x=>({title:x.title,views:x.views,age_days:x.age,multiple_of_median:x.mult,eng_pct:x.eng,minutes:+(x.sec/60).toFixed(1),immature:x.imm})),descriptions:Object.fromEntries(sel.map(x=>[x.title,x.desc]))};
+  const task=`Write the packaging report: 1 Scope and data limits (say if thumbnails or openings were not attached). 2 Title formulas with examples and multiples. 3 Thumbnail grammar. 4 Opening hooks. 5 Narrative structure. 6 Emotional triggers and worldview framing. 7 Recurring subjects. 8 What outliers share that weak videos lack.\n\nDATA:\n`+JSON.stringify(data);
+  try{return{text:await gem([{text:task},...parts,...vparts]),data}}
+  catch(e){if(!vparts.length)throw e;log("Video openings failed ("+e.message.slice(0,90)+"). Retrying without them.");data.video_openings_attached=0;return{text:await gem([{text:task.replace(/"video_openings_attached":\d+/,'"video_openings_attached":0')},...parts]),data}}}
+
+async function concepts(rep,data){
+  return gem([{text:`From the report and DATA, return JSON only: {"core_engine":"one sentence, topic-independent","concepts":[{"name":str,"idea":str,"queries":[exactly 3 YouTube search queries expressing the IDEA in different topics or niches, not the same wording]}]}. Give 4 concepts max. No invented numbers.\n\nREPORT:\n${rep}\n\nDATA:\n${JSON.stringify(data)}`}],true)}
+
+async function discover(cs,ref){
+  const after=new Date(Date.now()-180*864e5).toISOString(),hits=new Map();let q=0;
+  for(const c of cs)for(const qu of c.queries.slice(0,3)){
+    if(q>=10)break;q++;log("Searching: "+qu);
+    const r=await yt("search",100,{part:"snippet",q:qu,type:"video",videoDuration:"long",publishedAfter:after,order:"viewCount",maxResults:25});
+    for(const i of r.items||[]){const h=hits.get(i.id.videoId)||{cons:new Set()};h.cons.add(c.name);hits.set(i.id.videoId,h)}}
+  const V=await vstats([...hits.keys()]);
+  const cids=[...new Set(V.map(v=>v.ch))],C={};
+  for(let i=0;i<cids.length;i+=50){const r=await yt("channels",1,{part:"snippet,statistics",id:cids.slice(i,i+50).join(",")});for(const c of r.items)C[c.id]={name:c.snippet.title,subs:+c.statistics.subscriberCount||0,avg:(+c.statistics.viewCount||0)/Math.max(+c.statistics.videoCount||1,1),n:+c.statistics.videoCount||0}}
+  const now=Date.now(),wins=[];
+  for(const v of V){const c=C[v.ch];if(!c||v.ch===ref.id||v.sec<181||c.n<5||c.subs>50000||c.subs<100)continue;
+    const mult=v.views/c.avg;
+    if(mult>=5)wins.push({title:v.title,url:"https://youtu.be/"+v.id,views:v.views,age_days:Math.round((now-v.pub)/864e5),channel:c.name,channel_id:v.ch,subs:c.subs,multiple_of_channel_average:+mult.toFixed(1),concepts:[...hits.get(v.id).cons]})}
+  wins.sort((a,b)=>b.multiple_of_channel_average-a.multiple_of_channel_average);
+  const agg=cs.map(c=>{const w=wins.filter(x=>x.concepts.includes(c.name));return{concept:c.name,idea:c.idea,winning_videos:w.length,independent_channels:new Set(w.map(x=>x.channel_id)).size,wins_last_60_days:w.filter(x=>x.age_days<=60).length,median_channel_subs:med(w.map(x=>x.subs))}});
+  return{wins,agg,searched:q,scanned:V.length}}
+
+async function candidates(ref,rep,ev){
+  return gem([{text:`Propose candidate niches. For EVERY candidate give: supporting video links with observed metrics; evidence of demand and evidence of competition (only what DATA shows, e.g. count of independent channels, recency; there is NO search volume data); whether success looks repeatable or rests on one viral outlier (check if wins are the same story or from the same channel); confidence level based on data strength; the main reason it might fail; one small test video concept. Use markdown links. Separate OBSERVED from INFERENCE. Finish with a section "Where data is insufficient" and recommend further research. Note: multiples here compare each video to its channel's lifetime average views per video, a proxy that understates true outliers.\n\nREFERENCE CHANNEL: ${JSON.stringify(ref)}\n\nPACKAGING REPORT:\n${rep}\n\nDATA:\n${JSON.stringify(ev).slice(0,150000)}`}])}
+
+function md(t){
+  return esc(t).replace(/^#{1,3} (.*)$/gm,"<h4>$1</h4>").replace(/\*\*(.+?)\*\*/g,"<b>$1</b>")
+  .replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g,'<a href="$2" target="_blank" rel="noopener">$1</a>')
+  .replace(/^\s*[-*] (.*)$/gm,"<li>$1</li>").replace(/(<li>.*<\/li>\n?)+/g,m=>"<ul>"+m.replace(/\n/g,"")+"</ul>").replace(/<\/h4>\n/g,"</h4>")}
+
+const sec=(t,h,o)=>`<details ${o?"open":""}><summary>${t}</summary>${h}</details>`;
+const tbl=(hd,rows)=>`<div class="tw"><table><tr>${hd.map(h=>"<th>"+h+"</th>").join("")}</tr>${rows.map(r=>"<tr>"+r.map(c=>"<td>"+c+"</td>").join("")+"</tr>").join("")}</table></div>`;
+let full="";
+
+$("#go").onclick=async()=>{
+  const btn=$("#go");btn.disabled=true;$("#out").innerHTML="";quota=0;full="";$("#log").textContent="Starting...";
+  try{
+    if(!$("#yk").value.trim()||!$("#gk").value.trim())throw new Error("Add both API keys first.");
+    st.set("yk",$("#yk").value.trim());st.set("gk",$("#gk").value.trim());st.set("gm",$("#gm").value.trim());
+    let q=$("#q").value;const f=$("#f").files[0];
+    if(f)q=await fromShot(f);
+    if(!q)throw new Error("Enter a channel or choose a screenshot.");
+    log("1/6 Finding channel");const c=await resolve(q);
+    log(c.title+" | "+fmt(c.subs)+" subs | "+c.n+" videos");
+    log("2/6 Fetching videos");const M=metrics(await uploads(c));
+    if(M.L.length<3)throw new Error("Not enough long-form videos to build a baseline.");
+    log("Median "+fmt(M.median)+" views, baseline confidence: "+M.conf);
+    $("#out").innerHTML=sec("Reference channel: "+esc(c.title),`<p class="s">${fmt(c.subs)} subs, ${M.L.length} long-form videos, median ${fmt(M.median)} views (${M.nBase} in baseline, confidence ${M.conf}). Videos under 7 days old are excluded from the baseline.</p>`+tbl(["Video","Views","Age","x median"],M.L.slice(0,15).map(x=>[esc(x.title),fmt(x.views),Math.round(x.age)+"d",`<span class="${x.out?"hot":""}">${x.mult}x</span>`])),true);
+    log("3/6 Packaging analysis (Gemini)");const P=await packaging(c,M);
+    $("#out").innerHTML+=sec("Packaging report",`<div class="md">${md(P.text)}</div>`);
+    log("4/6 Extracting core concepts");const K=await concepts(P.text,P.data);
+    $("#out").innerHTML+=sec("Core engine and concepts",`<p class="md"><b>${esc(K.core_engine)}</b></p>`+K.concepts.map(k=>`<p><b>${esc(k.name)}</b><br>${esc(k.idea)}<br><span class="s">${k.queries.map(esc).join(" / ")}</span></p>`).join(""));
+    log("5/6 Searching adjacent niches (100 units per search)");const E=await discover(K.concepts,c);
+    log("Scanned "+E.scanned+" videos, found "+E.wins.length+" small-channel wins");
+    $("#out").innerHTML+=sec("Small channels beating their own average",tbl(["Video","Views","Subs","x avg","Age"],E.wins.slice(0,30).map(w=>[`<a href="${w.url}" target="_blank" rel="noopener">${esc(w.title)}</a><br><span class="s">${esc(w.channel)}</span>`,fmt(w.views),fmt(w.subs),w.multiple_of_channel_average+"x",w.age_days+"d"]))+`<p class="s">Per concept: ${E.agg.map(a=>esc(a.concept)+" ("+a.winning_videos+" wins, "+a.independent_channels+" channels, "+a.wins_last_60_days+" in last 60d)").join("; ")}</p>`);
+    log("6/6 Building candidate niches");
+    const ev={searches_run:E.searched,videos_scanned:E.scanned,per_concept:E.agg,wins:E.wins.slice(0,40)};
+    const R=await candidates({title:c.title,subs:c.subs,median:M.median},P.text,ev);
+    $("#out").insertAdjacentHTML("afterbegin",sec("Candidate niches",`<div class="md">${md(R)}</div>`,true));
+    full="# Candidate niches\n"+R+"\n\n# Packaging report\n"+P.text+"\n\n# Concepts\n"+JSON.stringify(K,null,1)+"\n\n# Evidence\n"+JSON.stringify(ev,null,1);
+    $("#out").insertAdjacentHTML("beforeend",`<button class="g" id="cp">Copy full report</button><button class="g" id="dl">Download .md</button>`);
+    $("#cp").onclick=()=>navigator.clipboard.writeText(full).then(()=>log("Copied."));
+    $("#dl").onclick=()=>{const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([full],{type:"text/markdown"}));a.download="niche-report.md";a.click()};
+    log("Done. YouTube API units used: "+quota+" of 10,000/day.");
+  }catch(e){log("ERROR: "+e.message);$("#log").classList.add("err")}
+  btn.disabled=false};
+</script></body></html>
