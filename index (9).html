@@ -1,0 +1,255 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Niche Engine</title>
+<style>
+:root{--bg:#f3f5f7;--fg:#12181f;--mut:#5d6975;--card:#fff;--bd:#d9e0e6;--acc:#0b6e78;--onacc:#fff;--bad:#b42318}
+@media(prefers-color-scheme:dark){:root{--bg:#0d1218;--fg:#e6ebf0;--mut:#8b98a5;--card:#151c24;--bd:#27313b;--acc:#52c7d1;--onacc:#06262a;--bad:#ff8a80}}
+*{box-sizing:border-box}
+body{margin:0 auto;background:var(--bg);color:var(--fg);font:15px/1.5 system-ui,sans-serif;padding:14px;max-width:760px}
+h1{font:700 26px/1.1 Georgia,serif;margin:6px 0 4px}h3,h4{font-family:Georgia,serif;margin:14px 0 6px}
+p.s{color:var(--mut);margin:0 0 12px}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:10px;padding:12px;margin:10px 0}
+label{display:block;font-size:13px;color:var(--mut);margin:8px 0 3px}
+input[type=text],input[type=password],input[type=file],textarea{width:100%;padding:10px;border:1px solid var(--bd);border-radius:8px;background:var(--bg);color:var(--fg);font:15px system-ui}
+textarea{resize:vertical}
+button{background:var(--acc);color:var(--onacc);border:0;border-radius:8px;padding:12px 16px;font:600 15px system-ui;width:100%;margin-top:12px}
+button.g{background:var(--card);color:var(--fg);border:1px solid var(--bd);width:auto;padding:8px 12px;margin:8px 8px 0 0;font-size:13px}
+button:disabled{opacity:.5}
+pre#log{background:var(--bg);border:1px solid var(--bd);border-radius:8px;padding:8px;max-height:140px;overflow:auto;font-size:12px;white-space:pre-wrap;margin:8px 0 0}
+summary{cursor:pointer;font-weight:600;padding:4px 0}
+.u{background:var(--card);border:1px solid var(--bd);border-radius:10px;padding:10px;margin:12px 0;color:var(--mut);font-size:14px;white-space:pre-wrap}
+.md{white-space:pre-wrap;overflow-wrap:anywhere;margin:8px 0}.md ul{margin:4px 0;padding-left:20px}.md a{color:var(--acc)}
+.tw{overflow-x:auto;margin:6px 0}table{border-collapse:collapse;font-size:13px;min-width:100%;white-space:normal}
+th,td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--bd);vertical-align:top}th{color:var(--mut)}
+.err{color:var(--bad)}
+</style></head><body>
+<h1>Niche Engine</h1>
+<p class="s">Write your own research prompt. The engine fetches live YouTube data to carry it out.</p>
+
+<div class="card"><details><summary>API keys and model</summary>
+<label>YouTube Data API key</label><input type="password" id="yk" autocomplete="off">
+<label>Gemini API key</label><input type="password" id="gk" autocomplete="off">
+<label>Gemini model</label><input type="text" id="gm" value="gemini-3.1-flash-lite">
+<button class="g" id="lm" type="button">Show models my key can use</button><div id="ml"></div>
+<p class="s" style="margin:8px 0 0;font-size:12px">Saved only in this browser. If Google retires a model, type the newer name here.</p>
+</details></div>
+
+<div class="card">
+<label>Your prompt (edit freely, it is saved)</label><textarea id="pr" rows="9"></textarea>
+<label>Reference channel (URL, @handle or name)</label><input type="text" id="q" placeholder="@channelhandle">
+<label>Or a screenshot of it</label><input type="file" id="f" accept="image/*">
+<label>Broad niche (optional)</label><input type="text" id="n" placeholder="e.g. football controversies">
+<button id="go">Run</button>
+<pre id="log">Ready.</pre>
+</div>
+
+<div id="out"></div>
+<div class="card" id="fuc" hidden>
+<label>Follow up (the engine keeps the whole conversation and data)</label>
+<textarea id="fu" rows="3" placeholder="e.g. Go with the first concept, give me 10 video ideas"></textarea>
+<button id="sd">Send</button>
+<button class="g" id="cp">Copy conversation</button>
+</div>
+
+<script>
+const $=s=>document.querySelector(s);
+const st={get:k=>{try{return localStorage.getItem(k)||""}catch(e){return""}},set:(k,v)=>{try{localStorage.setItem(k,v)}catch(e){}}};
+const DEFAULT_PROMPT=`YouTube Opportunity Research — Evidence First
+
+I will provide a reference YouTube channel and a broad niche.
+
+1. Analyse the channel's recent and best-performing videos. Record titles, upload dates, views, available engagement metrics, and channel size.
+2. Identify outlier videos using views relative to the channel's normal performance. Do not rank by raw views alone.
+3. Analyse the channel's packaging: title formulas, thumbnail composition, opening hooks, narrative structure, emotional triggers, worldview or ideological framing, and recurring subject matter.
+4. Search YouTube for adjacent niches using the same underlying concepts, not just similar wording.
+5. Find small and medium channels whose relevant videos outperform their normal baseline.
+6. Check how many comparable videos have appeared recently, how they perform, and whether several independent creators show demand.
+7. Propose candidate niches and show the evidence for and against each one.
+
+For every candidate, provide:
+- Supporting video links and observed metrics.
+- Evidence of demand and evidence of competition.
+- Whether success appears repeatable or depends on one viral outlier.
+- A confidence level based on the strength of the data.
+- The main reason the idea might fail.
+- One small, testable video concept.
+
+Rules: Never invent search volume, competition scores, or predicted views. Separate observed facts from interpretation. If the data is insufficient, say so and recommend further research rather than guessing.`;
+$("#pr").value=st.get("prompt")||DEFAULT_PROMPT;
+$("#pr").onchange=e=>st.set("prompt",e.target.value);
+["yk","gk"].forEach(i=>{const v=st.get(i);if(v)$("#"+i).value=v});
+if(st.get("gm3"))$("#gm").value=st.get("gm3");
+
+$("#lm").onclick=async()=>{try{const r=await fetch("https://generativelanguage.googleapis.com/v1beta/models?pageSize=100&key="+$("#gk").value.trim());const j=await r.json();if(!r.ok)throw new Error(j.error&&j.error.message||r.status);$("#ml").innerHTML=(j.models||[]).filter(m=>(m.supportedGenerationMethods||[]).includes("generateContent")).map(m=>m.name.replace("models/","")).filter(n=>/flash|pro/.test(n)).map(n=>`<button class="g" data-m="${esc(n)}">${esc(n)}</button>`).join("")||"No models found."}catch(e){$("#ml").textContent="Error: "+e.message}};
+$("#ml").onclick=e=>{const m=e.target.dataset&&e.target.dataset.m;if(m){$("#gm").value=m;st.set("gm3",m);log("Model set to "+m)}};
+let quota=0,searches=0,hist=[],convo="";
+const log=m=>{const l=$("#log");l.textContent+="\n"+m;l.scrollTop=1e9};
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const med=a=>{const s=[...a].sort((x,y)=>x-y),n=s.length;return n?(n%2?s[(n-1)/2]:(s[n/2-1]+s[n/2])/2):0};
+const fmt=n=>n>=1e6?(n/1e6).toFixed(2)+"M":n>=1e3?(n/1e3).toFixed(1)+"K":String(n);
+
+async function yt(ep,cost,p){
+  p.key=$("#yk").value.trim();quota+=cost;
+  const r=await fetch("https://www.googleapis.com/youtube/v3/"+ep+"?"+new URLSearchParams(p));
+  const j=await r.json();
+  if(!r.ok){const m=j.error&&j.error.message||r.status;const e=new Error("YouTube: "+m+(/blocked|not been used|disabled/i.test(m)?"  → Fix the key: Google Cloud > APIs & Services > Credentials > your key > API restrictions: allow YouTube Data API v3, and enable it under Library.":""));e.fatal=r.status==403||r.status==400;throw e}
+  return j}
+
+const SYS=`You are a YouTube opportunity research agent. Evidence first.
+RULES
+1. Get data with your tools. Never state channel stats, views or outliers from memory.
+2. Never calculate. Medians and multiples come from the tools. Quote them exactly.
+3. Never invent search volume, competition scores, CTR, retention or predicted views. You have none of these.
+4. Tag claims [OBSERVED] (from tool data or media) or [INFERENCE].
+5. If data is insufficient, say so and recommend further research instead of guessing.
+6. search_videos costs 100 quota units: use at most 10 per turn, each query expressing an underlying concept rather than similar wording.
+7. Follow the user's prompt for structure and depth. Keep answers tight and mobile-readable.`;
+
+async function gemRaw(body){
+  const url="https://generativelanguage.googleapis.com/v1beta/models/"+$("#gm").value.trim()+":generateContent?key="+$("#gk").value.trim();
+  for(let t=0;t<5;t++){
+    const r=await fetch(url,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+    const j=await r.json();
+    if(r.ok){const c=j.candidates&&j.candidates[0];
+      if(!c||!c.content)throw new Error("Gemini returned nothing ("+(c&&c.finishReason||j.promptFeedback&&j.promptFeedback.blockReason||"empty")+")");
+      c.content.parts=c.content.parts||[];return c}
+    const m=j.error&&j.error.message||r.status;
+    if(r.status==429||r.status==503){
+      if(/PerDay|limit: 0/i.test(String(m)))throw new Error("Gemini quota: "+String(m).slice(0,220)+"  → Daily/zero quota for this model. Try another model name in the model box, or wait for reset.");
+      const d=((j.error&&j.error.details||[]).find(x=>x.retryDelay)||{}).retryDelay;
+      const w=Math.min(60,d?parseFloat(d)+2:15*(t+1));
+      log("Gemini "+r.status+": "+String(m).slice(0,130)+" Waiting "+Math.round(w)+"s ("+(t+1)+"/5)");
+      await new Promise(z=>setTimeout(z,w*1000));continue}
+    throw new Error("Gemini: "+m+(/no longer available|not found/i.test(m)?"  → Type a newer model name in the model box.":""))}
+  throw new Error("Gemini rate limit. Wait a minute and run again.")}
+
+async function gem(parts){
+  const c=await gemRaw({systemInstruction:{parts:[{text:SYS}]},contents:[{role:"user",parts}],generationConfig:{temperature:.2}});
+  return c.content.parts.map(p=>p.text||"").join("")}
+
+const b64=async u=>{try{const b=await (await fetch(u)).blob();return await new Promise((ok,no)=>{const f=new FileReader();f.onload=()=>ok(f.result.split(",")[1]);f.onerror=no;f.readAsDataURL(b)})}catch(e){return null}};
+const dur=s=>{const m=/^P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?)?$/.exec(s||"");return m?(+m[1]||0)*86400+(+m[2]||0)*3600+(+m[3]||0)*60+(+m[4]||0):0};
+
+async function chan(p){
+  const r=await yt("channels",1,{part:"snippet,statistics,contentDetails",...p});const c=r.items&&r.items[0];
+  if(!c)throw new Error("Channel not found");
+  return{id:c.id,title:c.snippet.title,subs:+c.statistics.subscriberCount||0,views:+c.statistics.viewCount||0,n:+c.statistics.videoCount||0,up:c.contentDetails.relatedPlaylists.uploads}}
+async function resolve(q){
+  let m;q=(q||"").trim();
+  if(m=q.match(/channel\/(UC[\w-]{22})/)||q.match(/^(UC[\w-]{22})$/))return chan({id:m[1]});
+  if(m=q.match(/(@[\w.\-]+)/))return chan({forHandle:m[1]});
+  const r=await yt("search",100,{part:"snippet",q,type:"channel",maxResults:1});
+  if(!r.items||!r.items.length)throw new Error("No channel found for: "+q);
+  return chan({id:r.items[0].id.channelId})}
+
+async function vstats(ids){
+  const out=[];
+  for(let i=0;i<ids.length;i+=50){
+    const r=await yt("videos",1,{part:"snippet,statistics,contentDetails",id:ids.slice(i,i+50).join(",")});
+    for(const v of r.items){const s=v.snippet;out.push({id:v.id,ch:s.channelId,title:s.title,pub:Date.parse(s.publishedAt),views:+v.statistics.viewCount||0,likes:+v.statistics.likeCount||0,com:+v.statistics.commentCount||0,sec:dur(v.contentDetails.duration),desc:(s.description||"").slice(0,300),th:(s.thumbnails.high||s.thumbnails.medium||s.thumbnails.maxres||{}).url})}}
+  return out}
+async function uploads(c){
+  let ids=[],t;
+  do{const r=await yt("playlistItems",1,{part:"contentDetails",playlistId:c.up,maxResults:50,...(t?{pageToken:t}:{})});ids.push(...r.items.map(i=>i.contentDetails.videoId));t=r.nextPageToken}while(t&&ids.length<300);
+  return vstats(ids)}
+function metrics(v){
+  const now=Date.now();
+  const L=v.filter(x=>x.sec>=181).map(x=>({...x,age:+((now-x.pub)/864e5).toFixed(1)}));
+  L.forEach(x=>x.imm=x.age<7);
+  let base=L.filter(x=>!x.imm);if(base.length<5)base=L;
+  const m=med(base.map(x=>x.views));
+  L.forEach(x=>{x.mult=+(x.views/Math.max(m,1)).toFixed(2);x.out=x.mult>=3&&!x.imm;x.eng=+((x.likes+x.com)/Math.max(x.views,1)*100).toFixed(2)});
+  L.sort((a,b)=>b.mult-a.mult);
+  return{L,median:Math.round(m),nBase:base.length,conf:base.length<8?"low":base.length<20?"medium":"high",shorts:v.length-L.length}}
+
+/* ---------- tools the agent can call ---------- */
+const cache={};
+const TOOLS={
+  async analyze_channel({channel}){
+    const c=await resolve(channel);
+    if(!cache[c.id])cache[c.id]={c,M:metrics(await uploads(c))};
+    const{M}=cache[c.id];
+    return{channel:{id:c.id,title:c.title,subs:c.subs,total_views:c.views,videos:c.n},
+      baseline:{median_views:M.median,videos_in_baseline:M.nBase,confidence:M.conf,shorts_excluded:M.shorts,note:"videos under 7 days old are excluded from baseline; list shows top 60 long-form by multiple"},
+      videos:M.L.slice(0,60).map(x=>({id:x.id,title:x.title,published:new Date(x.pub).toISOString().slice(0,10),views:x.views,age_days:x.age,multiple_of_median:x.mult,eng_pct:x.eng,minutes:+(x.sec/60).toFixed(1),immature:x.imm})),
+      outlier_descriptions:M.L.filter(x=>x.out).slice(0,5).map(x=>({title:x.title,description:x.desc}))}},
+  async view_thumbnails({channel_id,count}){
+    const e=cache[channel_id];if(!e)throw new Error("Call analyze_channel first");
+    const L=e.M.L,sel=[...L.slice(0,Math.min(count||5,7)),...L.filter(x=>!x.imm).slice(-2)].filter((x,i,a)=>a.indexOf(x)===i);
+    const media=[],titles=[];
+    for(const x of sel){const d=x.th&&await b64(x.th);if(d){media.push({text:"Thumbnail ("+x.mult+"x median): "+x.title},{inlineData:{mimeType:"image/jpeg",data:d}});titles.push(x.title)}}
+    return{result:{attached:titles.length,of:sel.length,note:titles.length?"images attached in this turn":"browser blocked thumbnail loading; thumbnail composition cannot be observed",titles},media}},
+  async video_opening({video_id,seconds}){
+    try{const t=await gem([{fileData:{fileUri:"https://www.youtube.com/watch?v="+video_id,mimeType:"video/*"},videoMetadata:{startOffset:"0s",endOffset:Math.min(seconds||45,90)+"s"}},{text:"Quote the spoken words and describe the on-screen visuals of this opening. Only what is present."}]);return{video_id,opening:t}}
+    catch(e){return{video_id,error:"could not read video: "+e.message.slice(0,120)}}},
+  async search_videos({query,days}){
+    if(++searches>10)return{error:"Search limit for this turn reached (quota protection). Work with the data you have."};
+    log("  searching: "+query);
+    const after=new Date(Date.now()-(days||180)*864e5).toISOString();
+    const r=await yt("search",100,{part:"snippet",q:query,type:"video",videoDuration:"long",publishedAfter:after,order:"viewCount",maxResults:25});
+    const V=await vstats((r.items||[]).map(i=>i.id.videoId)),C={};
+    const cids=[...new Set(V.map(v=>v.ch))];
+    for(let i=0;i<cids.length;i+=50){const k=await yt("channels",1,{part:"snippet,statistics",id:cids.slice(i,i+50).join(",")});for(const c of k.items)C[c.id]={name:c.snippet.title,subs:+c.statistics.subscriberCount||0,n:+c.statistics.videoCount||0,avg:(+c.statistics.viewCount||0)/Math.max(+c.statistics.videoCount||1,1)}}
+    const now=Date.now();
+    return{query,note:"multiple_of_channel_avg compares a video to its channel's lifetime average views per video; it understates true outliers. Count independent channels yourself from channel_id.",
+      results:V.filter(v=>v.sec>=181&&C[v.ch]).map(v=>{const c=C[v.ch];return{title:v.title,url:"https://youtu.be/"+v.id,views:v.views,age_days:Math.round((now-v.pub)/864e5),channel:c.name,channel_id:v.ch,subs:c.subs,channel_videos:c.n,multiple_of_channel_avg:+(v.views/Math.max(c.avg,1)).toFixed(1)}}).sort((a,b)=>b.multiple_of_channel_avg-a.multiple_of_channel_avg)}}
+};
+const S="OBJECT",T="STRING";
+const DECL=[{functionDeclarations:[
+  {name:"analyze_channel",description:"Fetch a channel's full long-form video library and compute median views and each video's multiple of that median (outlier score). Returns channel id, subs, videos.",parameters:{type:S,properties:{channel:{type:T,description:"URL, @handle, channel id or name"}},required:["channel"]}},
+  {name:"view_thumbnails",description:"Attach the top outlier thumbnails (and two weakest) of an analysed channel so you can see them.",parameters:{type:S,properties:{channel_id:{type:T},count:{type:"INTEGER"}},required:["channel_id"]}},
+  {name:"video_opening",description:"Read the first seconds of a video (spoken words and visuals) to study its opening hook.",parameters:{type:S,properties:{video_id:{type:T},seconds:{type:"INTEGER"}},required:["video_id"]}},
+  {name:"search_videos",description:"Search YouTube long-form videos by a concept query within the last N days, ordered by views. Returns each video with channel subs and its multiple of the channel's average. Costs 100 quota units.",parameters:{type:S,properties:{query:{type:T},days:{type:"INTEGER"}},required:["query"]}}
+]}];
+
+async function agent(parts){
+  hist.push({role:"user",parts});searches=0;
+  for(let step=0;step<22;step++){
+    if(step>0)await new Promise(z=>setTimeout(z,3000));
+    const c=await gemRaw({systemInstruction:{parts:[{text:SYS}]},contents:hist,tools:step<20?DECL:undefined,generationConfig:{temperature:.2}});
+    hist.push(c.content);
+    const calls=c.content.parts.filter(p=>p.functionCall);
+    if(!calls.length)return c.content.parts.map(p=>p.text||"").join("");
+    const resp=[],media=[];
+    for(const p of calls){
+      const{name,args}=p.functionCall;log("Tool: "+name+" "+JSON.stringify(args||{}).slice(0,70));
+      let out;
+      try{const h=TOOLS[name]?await TOOLS[name](args||{}):{error:"unknown tool"};if(h&&h.media){media.push(...h.media);out=h.result}else out=h}
+      catch(e){if(e.fatal)throw e;out={error:e.message};log("  tool error: "+e.message)}
+      resp.push({functionResponse:{name,response:{result:JSON.stringify(out).slice(0,45000)}}})}
+    hist.push({role:"user",parts:[...resp,...media]})}
+  return"Stopped after too many tool steps. Ask a narrower follow-up."}
+
+function md(t){
+  return esc(t)
+  .replace(/((?:^\|.*\|[ \t]*\n?)+)/gm,b=>{const r=b.trim().split("\n").filter(l=>!/^\|[\s:|-]+\|?$/.test(l)).map(l=>l.trim().replace(/^\||\|$/g,"").split("|").map(c=>c.trim()));return'<div class="tw"><table>'+r.map((x,i)=>"<tr>"+x.map(c=>(i?"<td>":"<th>")+c+(i?"</td>":"</th>")).join("")+"</tr>").join("")+"</table></div>"})
+  .replace(/^#{1,3} (.*)$/gm,"<h4>$1</h4>").replace(/\*\*(.+?)\*\*/g,"<b>$1</b>")
+  .replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g,'<a href="$2" target="_blank" rel="noopener">$1</a>')
+  .replace(/^\s*[-*] (.*)$/gm,"<li>$1</li>").replace(/(<li>.*<\/li>\n?)+/g,m=>"<ul>"+m.replace(/\n/g,"")+"</ul>").replace(/<\/h4>\n/g,"</h4>")}
+
+async function turn(parts,label){
+  const btns=[$("#go"),$("#sd")];btns.forEach(b=>b.disabled=true);$("#log").classList.remove("err");quota=0;
+  $("#out").insertAdjacentHTML("beforeend",`<div class="u">${esc(label)}</div>`);
+  try{
+    log("Working... (a full run can take a few minutes)");
+    const a=await agent(parts);
+    $("#out").insertAdjacentHTML("beforeend",`<div class="md">${md(a)}</div>`);
+    convo+="\n\n## You\n"+label+"\n\n## Engine\n"+a;
+    $("#fuc").hidden=false;log("Done. YouTube units used this turn: "+quota+" of 10,000/day.");
+    $("#fuc").scrollIntoView({behavior:"smooth"});
+  }catch(e){log("ERROR: "+e.message);$("#log").classList.add("err");if(hist.length){$("#fuc").hidden=false;log("Progress is kept. Type: continue  in the follow-up box to resume.")}}
+  btns.forEach(b=>b.disabled=false)}
+
+$("#go").onclick=async()=>{
+  if(!$("#yk").value.trim()||!$("#gk").value.trim())return log("ERROR: add both API keys first (top of page).");
+  st.set("yk",$("#yk").value.trim());st.set("gk",$("#gk").value.trim());st.set("gm3",$("#gm").value.trim());st.set("prompt",$("#pr").value);
+  const ref=$("#q").value.trim(),f=$("#f").files[0],niche=$("#n").value.trim();
+  if(!ref&&!f)return log("ERROR: enter a reference channel or choose a screenshot.");
+  hist=[];convo="";$("#out").innerHTML="";
+  const parts=[{text:$("#pr").value+"\n\nREFERENCE CHANNEL: "+(ref||"(see screenshot; read the channel name or handle from it, then verify against tool data)")+"\nBROAD NICHE: "+(niche||"(not given; infer from the channel)")}];
+  if(f){const d=await new Promise(ok=>{const r=new FileReader();r.onload=()=>ok(r.result.split(",")[1]);r.readAsDataURL(f)});parts.push({text:"Screenshot of the reference channel:"},{inlineData:{mimeType:f.type||"image/jpeg",data:d}})}
+  await turn(parts,"Run: "+(ref||"screenshot")+(niche?" | "+niche:""))};
+$("#sd").onclick=async()=>{const t=$("#fu").value.trim();if(!t)return;$("#fu").value="";await turn([{text:t}],t)};
+$("#cp").onclick=()=>navigator.clipboard.writeText(convo).then(()=>log("Copied."));
+</script></body></html>
